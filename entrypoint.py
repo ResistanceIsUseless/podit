@@ -86,7 +86,7 @@ def nmap():
 @app.route('/nuclei', methods=['POST', 'GET'])
 def nuclei():
     try:
-        command = f'nmap-parse-output /tmp/nmap_results.xml http-ports http | nuclei'
+        command = f'naabu -if | nuclei | notify'
         subprocess.run(command, shell=True, check=True)
         results = subprocess.check_output(command, shell=True, universal_newlines=True)
         return jsonify({"results": results})
