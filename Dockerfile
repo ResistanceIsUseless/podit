@@ -53,7 +53,8 @@ RUN apk add --no-cache \
     nmap-scripts \
     wget \
     python3 \
-    py3-pip
+    py3-pip \
+    go
 
 RUN nmap --script-updatedb
 
@@ -87,18 +88,17 @@ WORKDIR /home/app
 COPY --from=ke-builder /work/httphandler/build/kubescape-ubuntu-latest /usr/bin/ksserver
 COPY --from=ke-builder /work/build/kubescape-ubuntu-latest /usr/bin/kubescape
 
-# Install nuclei
-RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.7/nuclei_2.9.7_linux_amd64.zip \
-   && unzip nuclei_2.9.7_linux_amd64.zip \
-   && mv nuclei /usr/local/bin/ \
-   && rm nuclei_2.9.7_linux_amd64.zip
+# Install nuclei & notify & naabu
+RUN go install -v github.com/projectdiscovery/notify/cmd/notify@latest
+RUN go install -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest
+RUN go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
 
-RUN git clone https://github.com/ResistanceIsUseless/nmap-parse-output /usr/local/bin/nmap-parse-output
+#RUN git clone https://github.com/ResistanceIsUseless/nmap-parse-output /usr/local/bin/nmap-parse-output
 
 USER app
 WORKDIR /home/app
-RUN nuclei -ut && nuclei -hc
-
+#update tool data
+RUN nuclei -ut && nuclei -hc && trivy --download-db-only
 # Copy entrypoint script
 COPY entrypoint.py /home/app/entrypoint.py
 COPY requirements.txt /home/app/requirements.txt
