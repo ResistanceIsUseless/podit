@@ -1,51 +1,48 @@
-ROM golang:1.17 AS builder
+FROM golang:1.20-alpine as ke-builder
+ARG image_version
+ARG client
+ENV RELEASE=$image_version
+ENV CLIENT=$client
+ENV GO111MODULE=
+ENV CGO_ENABLED=1
+# Install required python/pip
+ENV PYTHONUNBUFFERED=1
+RUN apk add --update --no-cache python3 gcc make git libc-dev binutils-gold cmake pkgconfig && ln -sf python3 /usr/bin/python
+RUN python3 -m ensurepip
+RUN pip3 install --no-cache --upgrade pip setuptools
+WORKDIR /work
+ADD . .
+# install libgit2
+RUN rm -rf git2go && make libgit2
+# build kubescape server
+WORKDIR /work/httphandler
+RUN python build.py
+RUN ls -ltr build/
+# build kubescape cmd
+WORKDIR /work
+RUN python build.py
+RUN /work/build/kubescape-ubuntu-latest download artifacts -o /work/artifacts
 
+
+FROM golang:1.17 AS ka-builder
 # no need to include cgo bindings
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
-
 # add ca certificates and timezone data files
 # hadolint ignore=DL3008
 RUN apt-get install --yes --no-install-recommends ca-certificates tzdata
-
-# add unprivileged user
-RUN adduser --shell /bin/true --uid 1000 --disabled-login --no-create-home --gecos '' app \
-  && sed -i -r "/^(app|root)/!d" /etc/group /etc/passwd \
-  && sed -i -r 's#^(.*):[^:]*$#\1:/sbin/nologin#' /etc/passwd
-
 # this is where we build our app
 WORKDIR /go/src/app/
-
 # download and cache our dependencies
 VOLUME /go/pkg/mod
 COPY go.mod go.sum ./
 RUN go mod download
-
 # compile kubeaudit
 COPY . ./
 RUN go build -a -ldflags '-w -s -extldflags "-static"' -o /go/bin/kubeaudit ./cmd/ \
   && chmod +x /go/bin/kubeaudit
 
-#
-# ---
-#
-
-# start with empty image
-FROM scratch
-
-# add-in our timezone data file
-COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
-
-# add-in our unprivileged user
-COPY --from=builder /etc/passwd /etc/group /etc/shadow /etc/
-
-# add-in our ca certificates
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-
-# add-in our application
-
 # Base image
 FROM --platform=linux/x86_64 alpine:latest
-
 # Install required packages
 RUN apk add --no-cache \
     bash \
@@ -69,15 +66,26 @@ RUN addgroup -S app && adduser -S app -G app && \
 RUN git clone https://github.com/docker/docker-bench-security.git /opt/docker-bench-security
 
 # Install kubeaudit
-COPY --from=builder --chown=app /go/bin/kubeaudit /kubeaudit
+# add-in our timezone data file
+COPY --from=ka-builder /usr/share/zoneinfo /usr/share/zoneinfo
+
+# add-in our ca certificates
+COPY --from=ka-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=ka-builder --chown=app /go/bin/kubeaudit /kubeaudit
 
 # Install linPEAS
 RUN git clone https://github.com/carlospolop/PEASS-ng.git /opt/linpeas
 
 # Install kubescape
-RUN curl -LO https://github.com/kubescape/kubescape/releases/latest/download/kubescape && \
-    chmod +x kubescape && \
-    mv kubescape /usr/local/bin/
+#RUN curl -LO https://github.com/kubescape/kubescape/releases/latest/download/kubescape && \
+#    chmod +x kubescape && \
+#    mv kubescape /usr/local/bin/
+COPY --from=ke-builder /work/artifacts/ /home/app/.kubescape
+RUN chown -R app:app /home/ks/.kubescape
+USER app
+WORKDIR /home/app
+COPY --from=ke-builder /work/httphandler/build/kubescape-ubuntu-latest /usr/bin/ksserver
+COPY --from=ke-builder /work/build/kubescape-ubuntu-latest /usr/bin/kubescape
 
 # Install nuclei
 RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.7/nuclei_2.9.7_linux_amd64.zip \
